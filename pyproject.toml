@@ -1,7 +1,7 @@
 [project]
 name = "xiaobo-tool"
 version = "1.0.0"
-description = "Add your description here"
+description = "python version of xiaobo tool module"
 readme = "README.md"
 authors = [
     { name = "Xiaobo", email = "17623577915@163.com" }
