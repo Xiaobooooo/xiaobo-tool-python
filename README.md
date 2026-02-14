@@ -3,7 +3,7 @@
 ![Python Version from PEP 621 TOML](https://img.shields.io/python/required-version-toml?logo=python&tomlFilePath=https%3A%2F%2Fraw.githubusercontent.com%2FXiaobooooo%2Fxiaobo-tool-python%2Frefs%2Fheads%2Fmain%2Fpyproject.toml)
 ![Project Version from TOML](https://img.shields.io/badge/dynamic/toml?logo=semanticweb&color=orange&label=version&query=project.version&url=https%3A%2F%2Fraw.githubusercontent.com%2FXiaobooooo%2Fxiaobo-tool-python%2Frefs%2Fheads%2Fmain%2Fpyproject.toml)
 
-Python 通用工具库，提供任务执行器、代理池、X(Twitter) 客户端等模块。
+Python 通用工具库，提供任务执行器、代理池、X(Twitter) 客户端、临时邮箱等模块。
 
 ## 安装
 
@@ -71,7 +71,7 @@ executor.submit_tasks_from_file(task_func=my_task, filename="accounts", separato
 | `MAX_WORKERS`    | `5`     | 最大线程数                                                                    |
 | `PROXY`          | *(空)*   | 代理，支持 `host:port` / `user:pass@host:port`，占位符 `*****` 自动替换为 index 或第一位数据 |
 | `PROXY_IPV6`     | *(空)*   | IPv6 代理，格式同 `PROXY`                                                      |
-| `PROXY_API`      | *(空)*   | 代理提取 API 地址（一行一个）                                                        |
+| `PROXY_API`      | *(空)*   | 代理提取 API 地址（一行一个），格式同 `PROXY`                                            |
 | `PROXY_IPV6_API` | *(空)*   | IPv6 代理提取 API 地址                                                         |
 | `RETRIES`        | `2`     | 重试次数（抛出 `TaskFailed` 不重试）                                                |
 | `RETRY_DELAY`    | `0`     | 重试延迟（秒）                                                                  |
@@ -116,6 +116,29 @@ OAuth2 授权：
 
 ```python
 redirect_uri = client.authorize_oauth2("https://x.com/i/oauth2/authorize?client_id=xxx&...")
+```
+
+### temp_email - 临时邮箱
+
+创建临时邮箱并接收邮件，支持同步和异步两种模式。
+
+```python
+from xiaobo_tool.temp_email import TempEmail
+
+with TempEmail() as mail:
+    domains = mail.query_domains()
+    mailbox = mail.create_mailbox()
+    result = mail.get_new_mail(mailbox)
+```
+
+异步模式：
+
+```python
+from xiaobo_tool.temp_email import AsyncTempEmail
+
+async with AsyncTempEmail() as mail:
+    mailbox = await mail.create_mailbox(domain="example.com", mail_type=1)
+    result = await mail.get_new_mail(mailbox, title="验证码")
 ```
 
 ### utils - 工具函数
