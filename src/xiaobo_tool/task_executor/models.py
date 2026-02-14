@@ -11,7 +11,7 @@ class Target:
     index: int
     data: Any
     data_preview: str
-    logger: Optional[Logger] = None
+    logger: Optional['Logger'] = None
     proxy: Optional[str] = None
 
     def refresh_proxy(self):
