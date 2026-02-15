@@ -7,6 +7,8 @@ import time
 from loguru import logger
 from curl_cffi import requests
 
+from xiaobo_tool.utils import generate_random_string
+
 
 class ProxyPool:
     """
@@ -149,6 +151,11 @@ class ProxyPool:
         else:
             proxy = self.proxy
             api_url = self.proxy_api
+
+        if replacement:
+            replacement = generate_random_string()
+        # 将replacement中的符号替换为空
+        replacement = ''.join(c for c in replacement if c.isalnum())
 
         # 优先使用直接配置的proxy
         if proxy:
