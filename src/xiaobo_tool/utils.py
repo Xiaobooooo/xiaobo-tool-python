@@ -3,7 +3,10 @@
 """
 import json
 import re
+import secrets
+import string
 import threading
+from enum import IntFlag
 from typing import List, Optional, NoReturn
 from pathlib import Path
 import sys
@@ -299,3 +302,69 @@ def parse_cloudflare_error(html_text: str) -> Optional[str]:
     if error_message:
         return f"Cloudflare Error - {error_message}"
     return None
+
+
+class CharType(IntFlag):
+    """随机字符串的字符类型标志位，支持位或组合。"""
+    DIGIT = 1  # 数字 0-9
+    LETTER = 2  # 字母 a-zA-Z
+    SYMBOL = 4  # 特殊字符
+    HEX = 8  # 十六进制 0-9a-fA-F
+
+
+class LetterCase(IntFlag):
+    """字母大小写标志位，支持位或组合。"""
+    UPPER = 1  # 大写字母
+    LOWER = 2  # 小写字母
+
+
+def generate_random_string(
+        length: int,
+        char_types: CharType = CharType.DIGIT | CharType.LETTER,
+        letter_case: LetterCase = LetterCase.UPPER | LetterCase.LOWER
+) -> str:
+    """
+    生成指定长度和字符类型的随机字符串。
+
+    :param length: 随机字符串长度，必须为正整数。
+    :param char_types: 字符类型标志位，支持位或组合，例如 CharType.DIGIT | CharType.LETTER：
+        - CharType.DIGIT: 数字 0-9
+        - CharType.LETTER: 字母 a-zA-Z（受 letter_case 控制）
+        - CharType.SYMBOL: 特殊字符
+        - CharType.HEX: 十六进制字符 0-9a-fA-F（受 letter_case 控制）
+    :param letter_case: 字母大小写标志位，支持位或组合：
+        - LetterCase.UPPER: 纯大写
+        - LetterCase.LOWER: 纯小写
+        - LetterCase.UPPER | LetterCase.LOWER: 大小写都包含（默认）
+    :return: 生成的随机字符串。
+    :raises ValueError: 参数无效时抛出。
+    """
+    if length <= 0:
+        raise ValueError("length 必须为正整数")
+    if not letter_case:
+        raise ValueError("letter_case 至少需要设置 LetterCase.UPPER 或 LetterCase.LOWER")
+
+    charset = ""
+    if char_types & CharType.DIGIT:
+        charset += string.digits
+    if char_types & CharType.LETTER:
+        charset += string.ascii_letters
+    if char_types & CharType.SYMBOL:
+        charset += string.punctuation
+    if char_types & CharType.HEX:
+        charset += "0123456789abcdefABCDEF"
+
+    if not charset:
+        raise ValueError("未指定有效的字符类型")
+
+    # 根据大小写标志转换字符池
+    has_upper = bool(letter_case & LetterCase.UPPER)
+    has_lower = bool(letter_case & LetterCase.LOWER)
+    if has_upper and not has_lower:
+        charset = charset.upper()
+    elif has_lower and not has_upper:
+        charset = charset.lower()
+
+    # 去重保持字符池唯一
+    charset = "".join(dict.fromkeys(charset))
+    return "".join(secrets.choice(charset) for _ in range(length))
