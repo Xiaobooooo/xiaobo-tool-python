@@ -319,14 +319,14 @@ class LetterCase(IntFlag):
 
 
 def generate_random_string(
-        length: int,
+        length: int = 6,
         char_types: CharType = CharType.DIGIT | CharType.LETTER,
         letter_case: LetterCase = LetterCase.UPPER | LetterCase.LOWER
 ) -> str:
     """
     生成指定长度和字符类型的随机字符串。
 
-    :param length: 随机字符串长度，必须为正整数。
+    :param length: 随机字符串长度，必须为正整数，默认为6。
     :param char_types: 字符类型标志位，支持位或组合，例如 CharType.DIGIT | CharType.LETTER：
         - CharType.DIGIT: 数字 0-9
         - CharType.LETTER: 字母 a-zA-Z（受 letter_case 控制）
