@@ -1,3 +1,3 @@
-from .x import XClient, BEARER_TOKEN
+from .x import XClient, AsyncXClient, BEARER_TOKEN
 
-__all__ = ['XClient', 'BEARER_TOKEN']
+__all__ = ['XClient', 'AsyncXClient', 'BEARER_TOKEN']

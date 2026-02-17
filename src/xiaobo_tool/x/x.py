@@ -2,39 +2,32 @@ import json
 from typing import Optional, TYPE_CHECKING
 
 from loguru import logger
-from xiaobo_tool.utils import get_session, raise_response_error, json_get
+
+from xiaobo_tool.utils import get_session, get_async_session, raise_response_error, json_get
 
 if TYPE_CHECKING:
     from loguru import Logger
+    from curl_cffi import Response
 
 # Twitter 网页端公开的 Bearer Token
 BEARER_TOKEN = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
 
 
-class XClient:
-    """使用 auth_token 操作 X(Twitter) API 的客户端"""
+class _XClientBase:
+    """XClient 和 AsyncXClient 的共享基类，包含 payload 构建和响应解析逻辑。"""
 
-    def __init__(
+    def _setup_session(
             self,
             auth_token: str,
-            ct0: Optional[str] = None,
-            proxy: Optional[str] = None,
-            _logger: Optional['Logger'] = None,
+            ct0: Optional[str],
+            proxy: Optional[str],
+            _logger: Optional['Logger'],
+            is_async: bool = False
     ):
-        """
-        初始化 XClient。
-
-        :param auth_token: X(Twitter) 的 auth_token。
-        :param ct0: CSRF token，为 None 时自动获取。
-        :param proxy: 代理地址。
-        :param _logger: 自定义日志器，为 None 时使用默认 logger。
-        :raises ValueError: auth_token 为空时抛出。
-        """
         if not auth_token:
             raise ValueError("auth_token 不能为空。")
-
         self.logger = _logger if _logger else logger
-        self.session = get_session(proxy)
+        self.session = get_async_session(proxy) if is_async else get_session(proxy)
         self.session.cookies.set("auth_token", auth_token, domain=".x.com")
         self.session.headers.update({
             "Authorization": f"Bearer {BEARER_TOKEN}",
@@ -42,45 +35,42 @@ class XClient:
         })
         if ct0:
             self.ct0 = ct0
-            self.session.cookies.set("ct0", self.ct0, domain=".x.com")
+            self.session.cookies.set("ct0", ct0, domain=".x.com")
             self.session.headers.update({"X-Csrf-Token": ct0})
-        else:
-            self.logger.warning("ct0 不存在，进行获取 ct0")
-            self.get_ct0()
 
-    def get_ct0(self) -> str:
-        """
-        获取 ct0 CSRF token。
+    @staticmethod
+    def _check_response(resp: 'Response', action: str) -> dict:
+        """检查 HTTP 状态码、账号锁定、errors 字段，返回解析后的 JSON。"""
+        if resp.status_code != 200:
+            raise_response_error(action, resp)
+        data = resp.json()
+        if "this account is temporarily locked" in resp.text.lower():
+            raise RuntimeError("账号已被临时锁定(temporarily locked)")
+        errors = data.get("errors")
+        if errors:
+            msg = errors[0].get("message", str(errors[0])) if isinstance(errors[0], dict) else str(errors[0])
+            raise RuntimeError(f"{action}失败: {msg}")
+        return data
 
-        :return: ct0 token 字符串。
-        :raises RuntimeError: 获取失败时抛出。
-        """
-        resp = self.session.get("https://api.x.com/1.1/account/settings.json")
+    def _save_ct0(self, resp: 'Response') -> str:
+        """从响应 cookies 中提取并保存 ct0。"""
         ct0 = self.session.cookies.get("ct0", domain=".x.com")
         if not ct0:
             raise RuntimeError(f"获取 ct0 失败, status={resp.status_code}")
-        logger.success("ct0获取成功")
+        self.logger.success("ct0获取成功")
         self.ct0 = ct0
         self.session.headers.update({"X-Csrf-Token": ct0})
         return ct0
 
-    def send_tweet(self, text: str) -> str:
-        """
-        发送推文。
+    # ---- payload 构建 ----
 
-        :param text: 推文内容。
-        :return: 推文链接。
-        :raises HTTPError: 请求失败时抛出。
-        :raises RuntimeError: API 返回业务错误时抛出。
-        """
-        payload = {
+    @staticmethod
+    def _tweet_payload(text: str) -> dict:
+        return {
             "variables": {
                 "tweet_text": text,
                 "dark_request": False,
-                "media": {
-                    "media_entities": [],
-                    "possibly_sensitive": False,
-                },
+                "media": {"media_entities": [], "possibly_sensitive": False},
                 "semantic_annotation_ids": [],
             },
             "features": {
@@ -110,86 +100,19 @@ class XClient:
             },
             "queryId": "oB-5XsHNAbjvARJEc8CZFw",
         }
-        data = self._request(
-            "POST",
-            "https://x.com/i/api/graphql/oB-5XsHNAbjvARJEc8CZFw/CreateTweet",
-            "发送推文",
-            json=payload,
-            headers={"Content-Type": "application/json"},
-        )
-        result = json_get(data, "data/create_tweet/tweet_results/result")
-        tweet_id = result["rest_id"]
-        screen_name = json_get(result, "core/user_results/result/legacy/screen_name", "i")
-        tweet_url = f"https://x.com/{screen_name}/status/{tweet_id}"
-        logger.success("推文发送成功，推文链接: {}", tweet_url)
-        return tweet_url
 
-    def retweet(self, tweet_id: str) -> dict:
-        """
-        转推。
+    @staticmethod
+    def _retweet_payload(tweet_id: str) -> dict:
+        return {"variables": {"tweet_id": tweet_id, "dark_request": False}, "queryId": "LFho5rIi4xcKO90p9jwG7A"}
 
-        :param tweet_id: 要转推的推文 ID。
-        :return: 转推结果字典。
-        :raises HTTPError: 请求失败时抛出。
-        :raises RuntimeError: API 返回业务错误时抛出。
-        """
-        payload = {
-            "variables": {
-                "tweet_id": tweet_id,
-                "dark_request": False,
-            },
-            "queryId": "LFho5rIi4xcKO90p9jwG7A",
-        }
-        data = self._request(
-            "POST",
-            "https://x.com/i/api/graphql/LFho5rIi4xcKO90p9jwG7A/CreateRetweet",
-            "转推",
-            json=payload,
-            headers={"Content-Type": "application/json"},
-        )
-        logger.success("转推成功, tweet_id={}", tweet_id)
-        return data
+    @staticmethod
+    def _undo_retweet_payload(tweet_id: str) -> dict:
+        return {"variables": {"source_tweet_id": tweet_id, "dark_request": False}, "queryId": "iQtK4dl5hBmXewYZuEOKVw"}
 
-    def undo_retweet(self, tweet_id: str) -> dict:
-        """
-        取消转推。
-
-        :param tweet_id: 要取消转推的推文 ID。
-        :return: 取消转推结果字典。
-        :raises HTTPError: 请求失败时抛出。
-        :raises RuntimeError: API 返回业务错误时抛出。
-        """
-        payload = {
-            "variables": {
-                "source_tweet_id": tweet_id,
-                "dark_request": False,
-            },
-            "queryId": "iQtK4dl5hBmXewYZuEOKVw",
-        }
-        data = self._request(
-            "POST",
-            "https://x.com/i/api/graphql/iQtK4dl5hBmXewYZuEOKVw/DeleteRetweet",
-            "取消转推",
-            json=payload,
-            headers={"Content-Type": "application/json"},
-        )
-        logger.success("取消转推成功, tweet_id={}", tweet_id)
-        return data
-
-    def get_user_by_screen_name(self, screen_name: str) -> dict:
-        """
-        通过 screen_name 查询用户信息。
-
-        :param screen_name: 用户的 screen_name（不含 @）。
-        :return: 用户信息字典，包含 rest_id 等字段。
-        :raises HTTPError: 请求失败时抛出。
-        :raises RuntimeError: 用户不存在时抛出。
-        """
-        params = {
-            "variables": json.dumps({
-                "screen_name": screen_name,
-                "withGrokTranslatedBio": False,
-            }),
+    @staticmethod
+    def _user_query_params(screen_name: str) -> dict:
+        return {
+            "variables": json.dumps({"screen_name": screen_name, "withGrokTranslatedBio": False}),
             "features": json.dumps({
                 "hidden_profile_subscriptions_enabled": True,
                 "profile_label_improvements_pcf_label_in_post_enabled": True,
@@ -205,148 +128,235 @@ class XClient:
                 "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
                 "responsive_web_graphql_timeline_navigation_enabled": True,
             }),
-            "fieldToggles": json.dumps({
-                "withPayments": False,
-                "withAuxiliaryUserLabels": True,
-            }),
+            "fieldToggles": json.dumps({"withPayments": False, "withAuxiliaryUserLabels": True}),
         }
-        data = self._request(
-            "GET",
-            "https://x.com/i/api/graphql/AWbeRIdkLtqTRN7yL_H8yw/UserByScreenName",
-            "查询用户",
-            params=params,
-        )
+
+    @staticmethod
+    def _friendship_payload(user_id: str) -> dict:
+        return {
+            "include_profile_interstitial_type": "1", "include_blocking": "1",
+            "include_blocked_by": "1", "include_followed_by": "1",
+            "include_want_retweets": "1", "include_mute_edge": "1",
+            "include_can_dm": "1", "include_can_media_tag": "1",
+            "include_ext_is_blue_verified": "1", "include_ext_verified_type": "1",
+            "include_ext_profile_image_shape": "1", "skip_status": "1",
+            "user_id": user_id,
+        }
+
+    # ---- 结果解析 ----
+
+    def _parse_tweet_result(self, data: dict) -> str:
+        result = json_get(data, "data/create_tweet/tweet_results/result")
+        tweet_id = result["rest_id"]
+        screen_name = json_get(result, "core/user_results/result/legacy/screen_name", "i")
+        tweet_url = f"https://x.com/{screen_name}/status/{tweet_id}"
+        self.logger.success("推文发送成功，推文链接: {}", tweet_url)
+        return tweet_url
+
+    def _parse_user_result(self, data: dict, screen_name: str) -> dict:
         result = json_get(data, "data/user/result")
         if not result:
             raise RuntimeError(f"用户 @{screen_name} 不存在")
-        logger.success("查询用户成功: @{}, user_id={}", screen_name, result["rest_id"])
+        self.logger.success("查询用户成功: @{}, user_id={}", screen_name, result["rest_id"])
         return result
 
-    def _request(self, method: str, url: str, action: str, **kwargs) -> dict:
-        """
-        统一请求方法，自动检查 HTTP 状态码和 errors 字段。
+    @staticmethod
+    def _parse_oauth2(data: dict, field: str, action: str):
+        value = data.get(field)
+        if not value:
+            raise RuntimeError(f"{action}失败: 响应中无 {field}")
+        return value
 
-        :param method: 请求方法（GET/POST）。
-        :param url: 请求 URL。
-        :param action: 操作描述，用于错误信息。
-        :param kwargs: 传递给 session.request 的额外参数。
-        :return: 响应 JSON 字典。
-        :raises HTTPError: HTTP 状态码非 200 时抛出。
-        :raises RuntimeError: 响应包含 errors 时抛出。
+
+class XClient(_XClientBase):
+    """使用 auth_token 同步操作 X(Twitter) API 的客户端"""
+
+    def __init__(
+            self,
+            auth_token: str,
+            ct0: Optional[str] = None,
+            proxy: Optional[str] = None,
+            _logger: Optional['Logger'] = None
+    ):
         """
+        初始化 XClient。
+
+        :param auth_token: X(Twitter) 的 auth_token。
+        :param ct0: CSRF token，为 None 时自动获取。
+        :param proxy: 代理地址。
+        :param _logger: 自定义日志器，为 None 时使用默认 logger。
+        """
+        self._setup_session(auth_token, ct0, proxy, _logger)
+        if not ct0:
+            self.logger.warning("ct0 不存在，进行获取 ct0")
+            self.get_ct0()
+
+    def _request(self, method: str, url: str, action: str, **kwargs) -> dict:
         resp = self.session.request(method, url, **kwargs)
-        if resp.status_code != 200:
-            raise_response_error(action, resp)
-        data = resp.json()
-        if "this account is temporarily locked" in resp.text.lower():
-            raise RuntimeError("账号已被临时锁定(temporarily locked)")
-        errors = data.get("errors")
-        if errors:
-            msg = errors[0].get("message", str(errors[0])) if isinstance(errors[0], dict) else str(errors[0])
-            raise RuntimeError(f"{action}失败: {msg}")
-        return data
+        return self._check_response(resp, action)
+
+    def get_ct0(self) -> str:
+        """获取 ct0 CSRF token。"""
+        resp = self.session.get("https://api.x.com/1.1/account/settings.json")
+        return self._save_ct0(resp)
 
     def _resolve_user_id(self, user_id: Optional[str] = None, screen_name: Optional[str] = None) -> str:
-        """
-        解析用户 ID，若仅提供 screen_name 则自动查询。
-
-        :param user_id: 用户 ID。
-        :param screen_name: 用户 screen_name。
-        :return: 用户 ID 字符串。
-        :raises ValueError: 两个参数都为空时抛出。
-        """
         if user_id:
             return user_id
         if screen_name:
             return self.get_user_by_screen_name(screen_name)["rest_id"]
         raise ValueError("user_id 和 screen_name 至少提供一个。")
 
-    def follow(self, user_id: Optional[str] = None, *, screen_name: Optional[str] = None) -> dict:
-        """
-        关注用户。
+    def send_tweet(self, text: str) -> str:
+        """发送推文，返回推文链接。"""
+        data = self._request("POST", "https://x.com/i/api/graphql/oB-5XsHNAbjvARJEc8CZFw/CreateTweet",
+                             "发送推文", json=self._tweet_payload(text), headers={"Content-Type": "application/json"})
+        return self._parse_tweet_result(data)
 
-        :param user_id: 目标用户 ID。
-        :param screen_name: 目标用户 screen_name，与 user_id 二选一。
-        :return: 用户信息字典。
-        :raises HTTPError: 请求失败时抛出。
-        """
+    def retweet(self, tweet_id: str) -> dict:
+        """转推，返回转推结果字典。"""
+        data = self._request("POST", "https://x.com/i/api/graphql/LFho5rIi4xcKO90p9jwG7A/CreateRetweet",
+                             "转推", json=self._retweet_payload(tweet_id), headers={"Content-Type": "application/json"})
+        self.logger.success("转推成功, tweet_id={}", tweet_id)
+        return data
+
+    def undo_retweet(self, tweet_id: str) -> dict:
+        """取消转推，返回结果字典。"""
+        data = self._request("POST", "https://x.com/i/api/graphql/iQtK4dl5hBmXewYZuEOKVw/DeleteRetweet",
+                             "取消转推", json=self._undo_retweet_payload(tweet_id), headers={"Content-Type": "application/json"})
+        self.logger.success("取消转推成功, tweet_id={}", tweet_id)
+        return data
+
+    def get_user_by_screen_name(self, screen_name: str) -> dict:
+        """通过 screen_name 查询用户信息，返回包含 rest_id 的用户字典。"""
+        data = self._request("GET", "https://x.com/i/api/graphql/AWbeRIdkLtqTRN7yL_H8yw/UserByScreenName",
+                             "查询用户", params=self._user_query_params(screen_name))
+        return self._parse_user_result(data, screen_name)
+
+    def follow(self, user_id: Optional[str] = None, *, screen_name: Optional[str] = None) -> dict:
+        """关注用户，user_id 和 screen_name 二选一。"""
         user_id = self._resolve_user_id(user_id, screen_name)
-        payload = {
-            "include_profile_interstitial_type": "1",
-            "include_blocking": "1",
-            "include_blocked_by": "1",
-            "include_followed_by": "1",
-            "include_want_retweets": "1",
-            "include_mute_edge": "1",
-            "include_can_dm": "1",
-            "include_can_media_tag": "1",
-            "include_ext_is_blue_verified": "1",
-            "include_ext_verified_type": "1",
-            "include_ext_profile_image_shape": "1",
-            "skip_status": "1",
-            "user_id": user_id,
-        }
-        data = self._request(
-            "POST",
-            "https://x.com/i/api/1.1/friendships/create.json",
-            "关注用户",
-            data=payload,
-        )
-        logger.success("关注用户成功: @{}", data.get("screen_name", user_id))
+        data = self._request("POST", "https://x.com/i/api/1.1/friendships/create.json",
+                             "关注用户", data=self._friendship_payload(user_id))
+        self.logger.success("关注用户成功: @{}", data.get("screen_name", user_id))
         return data
 
     def unfollow(self, user_id: Optional[str] = None, *, screen_name: Optional[str] = None) -> dict:
-        """
-        取消关注用户。
-
-        :param user_id: 目标用户 ID。
-        :param screen_name: 目标用户 screen_name，与 user_id 二选一。
-        :return: 用户信息字典。
-        :raises HTTPError: 请求失败时抛出。
-        """
+        """取消关注用户，user_id 和 screen_name 二选一。"""
         user_id = self._resolve_user_id(user_id, screen_name)
-        payload = {
-            "include_profile_interstitial_type": "1",
-            "include_blocking": "1",
-            "include_blocked_by": "1",
-            "include_followed_by": "1",
-            "include_want_retweets": "1",
-            "include_mute_edge": "1",
-            "include_can_dm": "1",
-            "include_can_media_tag": "1",
-            "include_ext_is_blue_verified": "1",
-            "include_ext_verified_type": "1",
-            "include_ext_profile_image_shape": "1",
-            "skip_status": "1",
-            "user_id": user_id,
-        }
-        data = self._request(
-            "POST",
-            "https://x.com/i/api/1.1/friendships/destroy.json",
-            "取消关注用户",
-            data=payload,
-        )
-        logger.success("取消关注用户成功: @{}", data.get("screen_name", user_id))
+        data = self._request("POST", "https://x.com/i/api/1.1/friendships/destroy.json",
+                             "取消关注用户", data=self._friendship_payload(user_id))
+        self.logger.success("取消关注用户成功: @{}", data.get("screen_name", user_id))
         return data
 
     def authorize_oauth2(self, auth_url: str) -> str:
-        """
-        批准 OAuth2 授权请求。
-
-        :param auth_url: OAuth2 授权页面 URL。
-        :return: 授权成功后的回调地址。
-        :raises RuntimeError: 获取 auth_code 或授权失败时抛出。
-        """
+        """批准 OAuth2 授权请求，返回回调地址。"""
         api_url = auth_url.replace("twitter.com", "x.com").replace("/i/oauth2/authorize", "/i/api/2/oauth2/authorize")
         data = self._request("GET", api_url, "获取授权auth_code")
-        auth_code = data.get("auth_code")
-        if not auth_code:
-            raise RuntimeError(f"获取授权auth_code失败: 响应中无 auth_code")
-
+        auth_code = self._parse_oauth2(data, "auth_code", "获取授权auth_code")
         data = self._request("POST", "https://x.com/i/api/2/oauth2/authorize", "OAuth2授权",
                              json={"approval": "true", "code": auth_code})
-        redirect_uri = data.get("redirect_uri")
-        if not redirect_uri:
-            raise RuntimeError(f"OAuth2授权失败: 响应中无 redirect_uri")
-        logger.success("OAuth2授权成功")
+        redirect_uri = self._parse_oauth2(data, "redirect_uri", "OAuth2授权")
+        self.logger.success("OAuth2授权成功")
+        return redirect_uri
+
+
+class AsyncXClient(_XClientBase):
+    """使用 auth_token 异步操作 X(Twitter) API 的客户端"""
+
+    def __init__(self, auth_token: str, ct0: Optional[str] = None,
+                 proxy: Optional[str] = None, _logger: Optional['Logger'] = None):
+        """
+        初始化 AsyncXClient。不会自动获取 ct0，请使用 create() 或手动调用 get_ct0()。
+
+        :param auth_token: X(Twitter) 的 auth_token。
+        :param ct0: CSRF token，为 None 时需手动获取。
+        :param proxy: 代理地址。
+        :param _logger: 自定义日志器，为 None 时使用默认 logger。
+        """
+        self._setup_session(auth_token, ct0, proxy, _logger, is_async=True)
+
+    @classmethod
+    async def create(
+            cls,
+            auth_token: str,
+            ct0: Optional[str] = None,
+            proxy: Optional[str] = None,
+            _logger: Optional['Logger'] = None
+    ) -> 'AsyncXClient':
+        """异步工厂方法，创建实例并自动获取 ct0。"""
+        instance = cls(auth_token, ct0, proxy, _logger)
+        if not ct0:
+            instance.logger.warning("ct0 不存在，进行获取 ct0")
+            await instance.get_ct0()
+        return instance
+
+    async def _request(self, method: str, url: str, action: str, **kwargs) -> dict:
+        resp = await self.session.request(method, url, **kwargs)
+        return self._check_response(resp, action)
+
+    async def get_ct0(self) -> str:
+        """获取 ct0 CSRF token。"""
+        resp = await self.session.get("https://api.x.com/1.1/account/settings.json")
+        return self._save_ct0(resp)
+
+    async def _resolve_user_id(self, user_id: Optional[str] = None, screen_name: Optional[str] = None) -> str:
+        if user_id:
+            return user_id
+        if screen_name:
+            result = await self.get_user_by_screen_name(screen_name)
+            return result["rest_id"]
+        raise ValueError("user_id 和 screen_name 至少提供一个。")
+
+    async def send_tweet(self, text: str) -> str:
+        """发送推文，返回推文链接。"""
+        data = await self._request("POST", "https://x.com/i/api/graphql/oB-5XsHNAbjvARJEc8CZFw/CreateTweet",
+                                   "发送推文", json=self._tweet_payload(text), headers={"Content-Type": "application/json"})
+        return self._parse_tweet_result(data)
+
+    async def retweet(self, tweet_id: str) -> dict:
+        """转推，返回转推结果字典。"""
+        data = await self._request("POST", "https://x.com/i/api/graphql/LFho5rIi4xcKO90p9jwG7A/CreateRetweet",
+                                   "转推", json=self._retweet_payload(tweet_id), headers={"Content-Type": "application/json"})
+        self.logger.success("转推成功, tweet_id={}", tweet_id)
+        return data
+
+    async def undo_retweet(self, tweet_id: str) -> dict:
+        """取消转推，返回结果字典。"""
+        data = await self._request("POST", "https://x.com/i/api/graphql/iQtK4dl5hBmXewYZuEOKVw/DeleteRetweet",
+                                   "取消转推", json=self._undo_retweet_payload(tweet_id), headers={"Content-Type": "application/json"})
+        self.logger.success("取消转推成功, tweet_id={}", tweet_id)
+        return data
+
+    async def get_user_by_screen_name(self, screen_name: str) -> dict:
+        """通过 screen_name 查询用户信息，返回包含 rest_id 的用户字典。"""
+        data = await self._request("GET", "https://x.com/i/api/graphql/AWbeRIdkLtqTRN7yL_H8yw/UserByScreenName",
+                                   "查询用户", params=self._user_query_params(screen_name))
+        return self._parse_user_result(data, screen_name)
+
+    async def follow(self, user_id: Optional[str] = None, *, screen_name: Optional[str] = None) -> dict:
+        """关注用户，user_id 和 screen_name 二选一。"""
+        user_id = await self._resolve_user_id(user_id, screen_name)
+        data = await self._request("POST", "https://x.com/i/api/1.1/friendships/create.json",
+                                   "关注用户", data=self._friendship_payload(user_id))
+        self.logger.success("关注用户成功: @{}", data.get("screen_name", user_id))
+        return data
+
+    async def unfollow(self, user_id: Optional[str] = None, *, screen_name: Optional[str] = None) -> dict:
+        """取消关注用户，user_id 和 screen_name 二选一。"""
+        user_id = await self._resolve_user_id(user_id, screen_name)
+        data = await self._request("POST", "https://x.com/i/api/1.1/friendships/destroy.json",
+                                   "取消关注用户", data=self._friendship_payload(user_id))
+        self.logger.success("取消关注用户成功: @{}", data.get("screen_name", user_id))
+        return data
+
+    async def authorize_oauth2(self, auth_url: str) -> str:
+        """批准 OAuth2 授权请求，返回回调地址。"""
+        api_url = auth_url.replace("twitter.com", "x.com").replace("/i/oauth2/authorize", "/i/api/2/oauth2/authorize")
+        data = await self._request("GET", api_url, "获取授权auth_code")
+        auth_code = self._parse_oauth2(data, "auth_code", "获取授权auth_code")
+        data = await self._request("POST", "https://x.com/i/api/2/oauth2/authorize", "OAuth2授权",
+                                   json={"approval": "true", "code": auth_code})
+        redirect_uri = self._parse_oauth2(data, "redirect_uri", "OAuth2授权")
+        self.logger.success("OAuth2授权成功")
         return redirect_uri
