@@ -3,7 +3,7 @@ import sys
 import dotenv
 from loguru import logger
 
-__version__ = '1.0.2'
+__version__ = '1.0.3'
 
 dotenv.load_dotenv()
 
