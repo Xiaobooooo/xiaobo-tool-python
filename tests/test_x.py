@@ -1,4 +1,6 @@
-from xiaobo_tool.x import XClient
+import pytest
+
+from xiaobo_tool.x import XClient, AsyncXClient
 
 
 def test_x_send_tweet(auth_token):
@@ -10,6 +12,13 @@ def test_x_send_tweet(auth_token):
 def test_x_get_user_by_screen_name(auth_token):
     x = XClient(auth_token)
     result = x.get_user_by_screen_name("0xiaobo888")
+    assert result["rest_id"] == "1993385550867578880"
+
+
+@pytest.mark.asyncio
+async def test_async_x_get_user_by_screen_name(auth_token):
+    x = await AsyncXClient.create(auth_token)
+    result = await x.get_user_by_screen_name("0xiaobo888")
     assert result["rest_id"] == "1993385550867578880"
 
 
