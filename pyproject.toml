@@ -1,6 +1,6 @@
 [project]
 name = "xiaobo-tool"
-version = "1.0.3"
+version = "1.0.4"
 description = "python version of xiaobo tool module"
 readme = "README.md"
 authors = [
