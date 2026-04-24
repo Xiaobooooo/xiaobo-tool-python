@@ -152,7 +152,7 @@ class ProxyPool:
             proxy = self.proxy
             api_url = self.proxy_api
 
-        if replacement:
+        if not replacement:
             replacement = generate_random_string()
         # 将replacement中的符号替换为空
         replacement = ''.join(c for c in replacement if c.isalnum())
