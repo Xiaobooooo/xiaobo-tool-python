@@ -29,9 +29,9 @@ class Settings(BaseSettings):
     # --- 任务执行配置 ---
     retries: int = Field(default=2, ge=0, description="重试次数")
     retry_delay: float = Field(default=0.0, ge=0, description="重试延迟（秒）")
-    shuffle: Union[bool, str] = Field(default=False, description="打乱任务顺序")
-    use_proxy_ipv6: Union[bool, str] = Field(default=False, description="使用IPv6代理")
-    disable_proxy: Union[bool, str] = Field(default=False, description="禁用代理")
+    shuffle: Union[bool] = Field(default=False, description="打乱任务顺序")
+    use_proxy_ipv6: Union[bool] = Field(default=False, description="使用IPv6代理")
+    disable_proxy: Union[bool] = Field(default=False, description="禁用代理")
 
     @field_validator('*', mode='before')
     @classmethod

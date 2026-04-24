@@ -119,7 +119,7 @@ class BaseTaskExecutor(ABC):
             task_name = f"{index + 1:05d}"
             task_logger = self.logger.bind(name=task_name)
 
-            data_preview = str(item[0]) if isinstance(item, (list, tuple)) else item
+            data_preview = str(item[0]) if isinstance(item, (list, tuple)) else str(item + 1) if isinstance(item, int) else str(item)
 
             target = Target(index=index, data=item, data_preview=data_preview, logger=task_logger)
 
@@ -371,7 +371,10 @@ class TaskExecutor(BaseTaskExecutor):
                 if target and target.logger:
                     target.logger.info(f"🚀 [{target.data_preview}]第 {attempt_counter['n']} 次运行")
                 # 每次重试提供新的代理
-                _refresh_proxy(replacement=f'{target.data_preview}({attempt_counter["n"]})')
+                if isinstance(target.data, int):
+                    _refresh_proxy()
+                else:
+                    _refresh_proxy(replacement=f'{target.data_preview}({attempt_counter["n"]})')
                 return task_func(target)
 
             return task_to_run()
@@ -536,7 +539,10 @@ class AsyncTaskExecutor(BaseTaskExecutor):
                 if target and target.logger:
                     target.logger.info(f"🚀 [{target.data_preview}]第 {attempt_counter['n']} 次运行")
                 # 每次重试提供新的代理
-                _refresh_proxy(replacement=f'{target.data_preview}({attempt_counter["n"]})')
+                if isinstance(target.data, int):
+                    _refresh_proxy()
+                else:
+                    _refresh_proxy(replacement=f'{target.data_preview}({attempt_counter["n"]})')
                 return await task_func(target)
 
             return await task_to_run()

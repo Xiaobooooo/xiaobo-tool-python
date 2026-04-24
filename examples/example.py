@@ -13,6 +13,7 @@ def example_task_processor(target: Target):
     """
     这是我们要并发执行的主任务函数。
     """
+    logger.debug(f"proxy: {target.proxy}")
     target.logger.info(f"开始处理任务，数据: {target.data}")
     target.logger.info(f"任务分配到的代理是: {target.proxy}")
 
